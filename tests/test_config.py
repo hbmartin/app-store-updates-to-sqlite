@@ -25,6 +25,10 @@ def test_load_config_resolves_database_relative_to_config(tmp_path: Path) -> Non
         ('database = "updates.sqlite3"\napp_ids = [true]\n', "positive integers"),
         ('database = "updates.sqlite3"\napp_ids = [1, 1]\n', "must not contain duplicates"),
         ("app_ids = [1]\n", "database must be a nonempty path string"),
+        (
+            'database = " updates.sqlite3"\napp_ids = [1]\n',
+            "must not have leading or trailing whitespace",
+        ),
     ],
 )
 def test_load_config_rejects_invalid_values(tmp_path: Path, config_text: str, message: str) -> None:

@@ -37,6 +37,8 @@ def load_config(path: Path) -> Config:
 def _database_path(value: Any, config_path: Path) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError("database must be a nonempty path string")
+    if value != value.strip():
+        raise ConfigError("database must not have leading or trailing whitespace")
 
     try:
         database = Path(value).expanduser()

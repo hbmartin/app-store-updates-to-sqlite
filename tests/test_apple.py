@@ -1,4 +1,5 @@
 import json
+from http.client import IncompleteRead
 from typing import Self
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
@@ -48,6 +49,11 @@ def test_build_lookup_url_uses_all_ids_and_us_storefront() -> None:
     assert parse_qs(parsed.query) == {"id": ["888422857,284882215"], "country": ["us"]}
 
 
+def test_build_lookup_url_rejects_empty_ids() -> None:
+    with pytest.raises(ValueError, match="app_ids must not be empty"):
+        build_lookup_url(())
+
+
 def test_fetch_releases_uses_http_wrapper_and_parses_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,6 +85,21 @@ def test_fetch_releases_wraps_request_wide_errors(
         raise error
 
     monkeypatch.setattr(apple, "urlopen", failing_urlopen)
+
+    with pytest.raises(AppleLookupError, match="Apple lookup request failed"):
+        apple.fetch_releases((10,))
+
+
+def test_fetch_releases_wraps_truncated_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TruncatedResponse(FakeResponse):
+        def read(self) -> bytes:
+            raise IncompleteRead(b"partial")
+
+    def fake_urlopen(_request: Request, timeout: float) -> FakeResponse:
+        assert timeout == 30.0
+        return TruncatedResponse(b"")
+
+    monkeypatch.setattr(apple, "urlopen", fake_urlopen)
 
     with pytest.raises(AppleLookupError, match="Apple lookup request failed"):
         apple.fetch_releases((10,))

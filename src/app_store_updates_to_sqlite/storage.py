@@ -10,9 +10,11 @@ from pathlib import Path
 from .models import ReleaseMetadata
 
 SCHEMA_VERSION = 1
+MINIMUM_SQLITE_VERSION = (3, 37, 0)
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS release_revisions (
+_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS release_revisions (
     id INTEGER PRIMARY KEY,
     app_id INTEGER NOT NULL CHECK (app_id > 0),
     version TEXT NOT NULL,
@@ -23,32 +25,38 @@ CREATE TABLE IF NOT EXISTS release_revisions (
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     UNIQUE (app_id, version, content_hash)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS version_events (
+) STRICT
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS version_events (
     id INTEGER PRIMARY KEY,
     app_id INTEGER NOT NULL CHECK (app_id > 0),
     previous_version TEXT,
     revision_id INTEGER NOT NULL REFERENCES release_revisions(id),
     detected_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS app_state (
+) STRICT
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS app_state (
     app_id INTEGER PRIMARY KEY CHECK (app_id > 0),
     current_version TEXT NOT NULL,
     current_content_hash TEXT NOT NULL CHECK (length(current_content_hash) = 64),
     current_revision_id INTEGER NOT NULL REFERENCES release_revisions(id),
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS release_revisions_app_version
-    ON release_revisions(app_id, version);
-CREATE INDEX IF NOT EXISTS version_events_app_detected
-    ON version_events(app_id, detected_at);
-
-CREATE VIEW IF NOT EXISTS app_store_update_events AS
-SELECT
+) STRICT
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS release_revisions_app_version
+    ON release_revisions(app_id, version)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS version_events_app_detected
+    ON version_events(app_id, detected_at)
+    """,
+    """
+    CREATE VIEW IF NOT EXISTS app_store_update_events AS
+    SELECT
     events.id AS event_id,
     events.app_id AS app_id,
     events.previous_version AS previous_version,
@@ -60,9 +68,10 @@ SELECT
     events.detected_at AS detected_at,
     revisions.first_seen_at AS first_seen_at,
     revisions.last_seen_at AS last_seen_at
-FROM version_events AS events
-JOIN release_revisions AS revisions ON revisions.id = events.revision_id;
-"""
+    FROM version_events AS events
+    JOIN release_revisions AS revisions ON revisions.id = events.revision_id
+    """,
+)
 
 
 class StorageError(RuntimeError):
@@ -82,15 +91,15 @@ def store_releases(
     observed_at: str,
 ) -> StorageSummary:
     """Atomically persist a collection of successful app observations."""
+    _require_supported_sqlite()
     database.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database, timeout=5.0, isolation_level=None)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        _initialize_schema(connection)
         connection.execute("BEGIN IMMEDIATE")
         try:
+            _initialize_schema(connection)
             summary = _store_in_transaction(connection, releases, observed_at)
         except BaseException:
             connection.rollback()
@@ -101,10 +110,20 @@ def store_releases(
         connection.close()
 
 
+def _require_supported_sqlite() -> None:
+    if sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION:
+        required = ".".join(str(part) for part in MINIMUM_SQLITE_VERSION)
+        raise StorageError(
+            f"SQLite {required} or newer is required for STRICT tables; "
+            f"found {sqlite3.sqlite_version}"
+        )
+
+
 def _initialize_schema(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == 0:
-        connection.executescript(_SCHEMA)
+        for statement in _SCHEMA_STATEMENTS:
+            connection.execute(statement)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif version != SCHEMA_VERSION:
         raise StorageError(
@@ -129,7 +148,7 @@ def _store_in_transaction(
             (release.app_id,),
         ).fetchone()
         previous_version = state["current_version"] if state is not None else None
-        version_changed = state is None or previous_version != release.version
+        version_changed = previous_version != release.version
 
         if state is None:
             connection.execute(

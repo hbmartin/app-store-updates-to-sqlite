@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import Any
 from urllib.error import URLError
 from urllib.parse import urlencode
@@ -27,6 +28,8 @@ class LookupOutcome:
 
 
 def build_lookup_url(app_ids: tuple[int, ...]) -> str:
+    if not app_ids:
+        raise ValueError("app_ids must not be empty")
     query = urlencode({"id": ",".join(str(app_id) for app_id in app_ids), "country": STOREFRONT})
     return f"{LOOKUP_ENDPOINT}?{query}"
 
@@ -42,7 +45,14 @@ def fetch_releases(
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
             payload = json.loads(response.read())
-    except (OSError, URLError, TimeoutError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (
+        HTTPException,
+        OSError,
+        URLError,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
         raise AppleLookupError(f"Apple lookup request failed: {error}") from error
 
     return parse_lookup_response(app_ids, payload)

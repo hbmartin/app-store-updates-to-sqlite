@@ -1,9 +1,11 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
+from app_store_updates_to_sqlite import storage
 from app_store_updates_to_sqlite.models import ReleaseMetadata
 from app_store_updates_to_sqlite.storage import StorageError, store_releases
 
@@ -138,8 +140,45 @@ def test_concurrent_initial_observations_create_one_event(tmp_path: Path) -> Non
 
 def test_rejects_unknown_schema_version(tmp_path: Path) -> None:
     database = tmp_path / "updates.sqlite3"
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         connection.execute("PRAGMA user_version = 99")
+        connection.commit()
 
     with pytest.raises(StorageError, match="unsupported database schema version 99"):
         store_releases(database, [release()], "2026-01-01T00:00:00Z")
+
+
+def test_initial_schema_rolls_back_when_storage_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "updates.sqlite3"
+
+    def fail_storage(_connection: sqlite3.Connection, _releases: object, _observed_at: str) -> None:
+        raise RuntimeError("simulated storage failure")
+
+    monkeypatch.setattr(storage, "_store_in_transaction", fail_storage)
+
+    with pytest.raises(RuntimeError, match="simulated storage failure"):
+        store_releases(database, [release()], "2026-01-01T00:00:00Z")
+
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'index')"
+            ).fetchall()
+            == []
+        )
+
+
+def test_rejects_unsupported_sqlite_before_creating_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "nested" / "updates.sqlite3"
+    monkeypatch.setattr(storage.sqlite3, "sqlite_version_info", (3, 36, 0))
+    monkeypatch.setattr(storage.sqlite3, "sqlite_version", "3.36.0")
+
+    with pytest.raises(StorageError, match="SQLite 3.37.0 or newer.*found 3.36.0"):
+        store_releases(database, [release()], "2026-01-01T00:00:00Z")
+
+    assert not database.parent.exists()
