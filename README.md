@@ -91,9 +91,11 @@ The `app_state` table contains the latest successfully observed version and revi
 Tests mock the Apple endpoint and never require the live service.
 
 ```console
+uv run lizard src tests
+uv run pyrefly check
+uv run ty check
+uv run ruff check .
+uv run ruff format --check .
 uv run pytest
 uv run pytest --cov=app_store_updates_to_sqlite
-uv run ruff check .
-uv run ty check
-uv run pyrefly check
 ```
