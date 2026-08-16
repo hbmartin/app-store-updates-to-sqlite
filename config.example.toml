@@ -1,0 +1,2 @@
+database = "app-store-updates.sqlite3"
+app_ids = [888422857]
