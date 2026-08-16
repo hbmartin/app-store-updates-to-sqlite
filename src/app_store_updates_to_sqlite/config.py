@@ -38,10 +38,13 @@ def _database_path(value: Any, config_path: Path) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError("database must be a nonempty path string")
 
-    database = Path(value).expanduser()
-    if not database.is_absolute():
-        database = config_path.parent / database
-    return database.resolve()
+    try:
+        database = Path(value).expanduser()
+        if not database.is_absolute():
+            database = config_path.parent / database
+        return database.resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ConfigError(f"invalid database path {value!r}: {error}") from error
 
 
 def _app_ids(value: Any) -> tuple[int, ...]:

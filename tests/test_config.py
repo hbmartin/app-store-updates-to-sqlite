@@ -42,3 +42,11 @@ def test_load_config_rejects_invalid_values(
 def test_load_config_reports_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="configuration file not found"):
         load_config(tmp_path / "missing.toml")
+
+
+def test_load_config_reports_invalid_database_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('database = "\\u0000"\napp_ids = [1]\n')
+
+    with pytest.raises(ConfigError, match="invalid database path"):
+        load_config(config_path)
