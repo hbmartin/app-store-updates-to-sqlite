@@ -1,5 +1,6 @@
 import io
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from app_store_updates_to_sqlite.apple import AppleLookupError, LookupOutcome
@@ -17,16 +18,15 @@ def release(app_id: int) -> ReleaseMetadata:
     )
 
 
-def write_config(tmp_path: Path, app_ids: str = "[10]") -> Path:
+def write_config(tmp_path: Path, app_ids: str = "[10]", database: str = "updates.sqlite3") -> Path:
     config_path = tmp_path / "config.toml"
-    config_path.write_text(f'database = "updates.sqlite3"\napp_ids = {app_ids}\n')
+    config_path.write_text(f'database = "{database}"\napp_ids = {app_ids}\n')
     return config_path
 
 
 def test_cli_saves_valid_apps_and_returns_nonzero_for_partial_errors(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, "[10, 20]")
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    output = io.StringIO()
 
     def fetcher(app_ids: tuple[int, ...]) -> LookupOutcome:
         assert app_ids == (10, 20)
@@ -39,14 +39,15 @@ def test_cli_saves_valid_apps_and_returns_nonzero_for_partial_errors(tmp_path: P
         ["--config", str(config_path)],
         fetcher=fetcher,
         clock=lambda: "2026-01-02T00:00:00Z",
-        stdout=stdout,
-        stderr=stderr,
+        stdout=output,
+        stderr=output,
     )
 
     assert exit_code == 1
-    assert "processed 1 app(s)" in stdout.getvalue()
-    assert "app 20: Apple returned no result" in stderr.getvalue()
-    with sqlite3.connect(tmp_path / "updates.sqlite3") as connection:
+    assert "processed 1 app(s)" in output.getvalue()
+    assert "app 20: Apple returned no result" in output.getvalue()
+    assert output.getvalue().index("app 20:") < output.getvalue().index("processed 1 app(s)")
+    with closing(sqlite3.connect(tmp_path / "updates.sqlite3")) as connection:
         assert connection.execute("SELECT count(*) FROM version_events").fetchone()[0] == 1
 
 
@@ -68,6 +69,27 @@ def test_cli_request_wide_failure_does_not_create_database(tmp_path: Path) -> No
     assert not (tmp_path / "updates.sqlite3").exists()
 
 
+def test_cli_all_app_failures_do_not_create_database(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path, database="nested/updates.sqlite3")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    def failing_fetcher(_app_ids: tuple[int, ...]) -> LookupOutcome:
+        return LookupOutcome(releases={}, errors={10: "Apple returned no result"})
+
+    exit_code = run(
+        ["--config", str(config_path)],
+        fetcher=failing_fetcher,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert stdout.getvalue() == ""
+    assert "app 10: Apple returned no result" in stderr.getvalue()
+    assert not (tmp_path / "nested").exists()
+
+
 def test_cli_invalid_config_returns_usage_error(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text('database = "updates.sqlite3"\napp_ids = []\n')
@@ -77,6 +99,24 @@ def test_cli_invalid_config_returns_usage_error(tmp_path: Path) -> None:
 
     assert exit_code == 2
     assert "app_ids must be a nonempty list" in stderr.getvalue()
+
+
+def test_cli_argument_error_uses_injected_stderr_and_returns_status() -> None:
+    stderr = io.StringIO()
+
+    exit_code = run(["--unknown"], stderr=stderr)
+
+    assert exit_code == 2
+    assert "unrecognized arguments: --unknown" in stderr.getvalue()
+
+
+def test_cli_help_uses_injected_stdout_and_returns_status() -> None:
+    stdout = io.StringIO()
+
+    exit_code = run(["--help"], stdout=stdout)
+
+    assert exit_code == 0
+    assert "Poll current iOS App Store release metadata" in stdout.getvalue()
 
 
 def test_utc_now_uses_utc_iso_8601() -> None:

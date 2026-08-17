@@ -11,8 +11,8 @@ version are retained as distinct revisions.
 
 ## Setup
 
-The project requires Python 3.12 or newer and uses
-[`uv`](https://docs.astral.sh/uv/) for environment management.
+The project requires Python 3.12 or newer and SQLite 3.37 or newer (for `STRICT` tables).
+It uses [`uv`](https://docs.astral.sh/uv/) for environment management.
 
 ```console
 uv sync
